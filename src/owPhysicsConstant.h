@@ -67,8 +67,14 @@ const float CFLLimit = 100.0f;
 
 const double beta = timeStep*timeStep*mass*mass*2/(rho0*rho0);// B. Solenthaler's dissertation, formula 3.6 (end of page 30)
 const double Wpoly6Coefficient = 315.0 / ( 64.0 * M_PI * pow( (double)(h*simulationScale), 9.0 ) );
+const float polyCoeff_x_mass = (float)(((double)mass)*Wpoly6Coefficient);
+const float scaledPolyCoeff_x_mass = 315.f / (64.f * M_PI * 0.000256f * (float)(pow((double)h,9.0)));
+const float surfTensCoeff = -1.5e-09f * 0.3f* (float)(Wpoly6Coefficient * pow(h*simulationScale*h*simulationScale/2.0,3.0)) * simulationScale;
+
 const double gradWspikyCoefficient= -45.0 / ( M_PI * pow( (double)(h*simulationScale), 6.0 ) );
+const float spikyCoeff_x_mass = (float)(((double)mass) * gradWspikyCoefficient);
 const double del2WviscosityCoefficient = - gradWspikyCoefficient;
+const float viscosityCoeffCombined = (float)(((double)(mass*viscosity))*del2WviscosityCoefficient);
 const float gravity_x = 0.0f;
 const float gravity_y = -9.8f;
 const float gravity_z = 0.0f;

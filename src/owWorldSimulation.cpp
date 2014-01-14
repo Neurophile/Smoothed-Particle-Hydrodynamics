@@ -861,7 +861,7 @@ void respond_key_pressed(unsigned char key, int x, int y)
 void idle (void) 
 { 
   glutSetWindow (winIdMain); 
-  glutPostRedisplay (); 
+//  glutPostRedisplay ();//Chris J. Jan 2014 extra display steps slow down the sim
 } 
 //static char label[1000];                            /* Storage for current string   */
 

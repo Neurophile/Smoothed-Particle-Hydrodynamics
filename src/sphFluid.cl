@@ -33,7 +33,7 @@
 #define PI_CELL_ID( name ) name.x
 #define PI_SERIAL_ID( name ) name.y
 
-#define NEIGHBOR_MAP_ID( nm ) nm.x
+#define NEIGHBOR_MAP_ID( nm ) as_int(nm.x)
 #define NEIGHBOR_MAP_DISTANCE( nm ) nm.y
 
 #define RHO( i ) i.x
@@ -58,7 +58,7 @@
 #elif defined(cl_amd_fp64)
     #pragma OPENCL EXTENSION cl_amd_fp64 : enable
 #else
-    #error "Double precision floating point not supported by OpenCL implementation."
+   // #error "Double precision floating point not supported by OpenCL implementation."
 #endif
 
 __kernel void clearBuffers(
@@ -72,7 +72,7 @@ __kernel void clearBuffers(
 	int outIdx = ( id * MAX_NEIGHBOR_COUNT ) >> 1;//int4 versus int2 addressing
 	float4 fdata = (float4)( -1, -1, -1, -1 );
 	int i,j,k,mnl;//mnl = membrane number in the list. 0..MAX_MEMBRANES_INCLUDING_SAME_PARTICLE-1
-
+	
 	nm[ outIdx++ ] = fdata;
 	nm[ outIdx++ ] = fdata;
 	nm[ outIdx++ ] = fdata;
@@ -137,7 +137,6 @@ int searchForNeighbors_b(
 						 float4 position_,
 						 int myParticleId,
 						 __global float4 * sortedPosition,
-						 __global float2 * neighborMap,
 						 int * closest_indexes,
 						 float * closest_distances,
 						 int last_farthest,
@@ -269,44 +268,46 @@ __kernel void findNeighbors(
 	int last_farthest = 0;
 	
 	last_farthest = searchForNeighbors_b( searchCells[0], gridCellIndex, position_,
-										 id, sortedPosition, neighborMap,
+										 id, sortedPosition,
 										 closest_indexes, closest_distances, last_farthest, &found_count );
 	
 	last_farthest = searchForNeighbors_b( searchCells[1], gridCellIndex, position_,
-										 id, sortedPosition, neighborMap,
+										 id, sortedPosition,
 										 closest_indexes, closest_distances, last_farthest, &found_count  );
 	
 	last_farthest = searchForNeighbors_b( searchCells[2], gridCellIndex, position_,
-										 id, sortedPosition, neighborMap,
+										 id, sortedPosition,
 										 closest_indexes, closest_distances, last_farthest, &found_count  );
 	
 	last_farthest = searchForNeighbors_b( searchCells[3], gridCellIndex, position_,
-										 id, sortedPosition, neighborMap,
+										 id, sortedPosition,
 										 closest_indexes, closest_distances, last_farthest, &found_count  );
 	
 	last_farthest = searchForNeighbors_b( searchCells[4], gridCellIndex, position_,
-										 id, sortedPosition, neighborMap,
+										 id, sortedPosition,
 										 closest_indexes, closest_distances, last_farthest, &found_count  );
 	
 	last_farthest = searchForNeighbors_b( searchCells[5], gridCellIndex, position_,
-										 id, sortedPosition, neighborMap,
+										 id, sortedPosition,
 										 closest_indexes, closest_distances, last_farthest, &found_count  );
 	
 	last_farthest = searchForNeighbors_b( searchCells[6], gridCellIndex, position_,
-										 id, sortedPosition, neighborMap,
+										 id, sortedPosition,
 										 closest_indexes, closest_distances, last_farthest, &found_count  );
 	
 	last_farthest = searchForNeighbors_b( searchCells[7], gridCellIndex, position_,
-										 id, sortedPosition, neighborMap,
+										 id, sortedPosition,
 										 closest_indexes, closest_distances, last_farthest, &found_count );
 	
 	for(int j=0; j<MAX_NEIGHBOR_COUNT; j++){
+		float2 neighbor_data;
+		neighbor_data.x = as_float(closest_indexes[j]);
 		if(closest_indexes[j] >= 0){
-			float2 neighbor_data;
-			neighbor_data.x = closest_indexes[j];
 			neighbor_data.y = SQRT( closest_distances[j] ) * simulationScale; // scaled, OK
-			neighborMap[ id*MAX_NEIGHBOR_COUNT + j ] = neighbor_data;
+		}else{
+			neighbor_data.y = -1.f;
 		}
+		neighborMap[ id*MAX_NEIGHBOR_COUNT + j ] = neighbor_data;
 	}
 	
 	
@@ -455,7 +456,8 @@ __kernel void sortPostPass(
 
 __kernel void pcisph_computeDensity(
 									 __global float2 * neighborMap,
-									 /*float*/double Wpoly6Coefficient,
+									 float polyCoeff_x_mass,
+									 //double Wpoly6Coefficient,
 									 // double gradWspikyCoefficient,
 									 float h,
 									 float mass,
@@ -474,7 +476,7 @@ __kernel void pcisph_computeDensity(
 	id = particleIndexBack[id];//track selected particle (indices are not shuffled anymore)
 	int idx = id * MAX_NEIGHBOR_COUNT;
 	int nc=0;//neighbor counter
-	/*float*/double density = 0.0f;
+	float/*double*/ density = 0.0f;
 	float r_ij2;//squared r_ij
 	float hScaled = h * simulationScale;//scaled smoothing radius
 	float hScaled2 = hScaled*hScaled;//squared scaled smoothing radius
@@ -497,7 +499,8 @@ __kernel void pcisph_computeDensity(
 	//if(density==0.f) density = hScaled2*hScaled2*hScaled2;
 	if(density<hScaled6) density = hScaled6;
 
-	density *= ((double)mass)*Wpoly6Coefficient; // since all particles are same fluid type, factor this out to here
+	density *= polyCoeff_x_mass;//Chris J. Jan 2014 factored out coeff math to host side
+	//density *= ((double)mass)*Wpoly6Coefficient; // since all particles are same fluid type, factor this out to here
 	rho[ id ] = density; 		
 }
 /*
@@ -578,8 +581,10 @@ __kernel void pcisph_computeForcesAndInitPressure(
 								  __global float4 * sortedVelocity,
 								  __global float4 * acceleration,
 								  __global uint * particleIndexBack,
-								  /*float*/double Wpoly6Coefficient,
-								  /*float*/double del2WviscosityCoefficient,
+								  float surfTensCoeff,
+								  //double Wpoly6Coefficient,
+								  float viscosityCoeffCombined,
+								  //double del2WviscosityCoefficient,
 								  float h,
 								  float mass,
 								  float mu,
@@ -617,6 +622,7 @@ __kernel void pcisph_computeForcesAndInitPressure(
 	float4 vi,vj;
 	float rho_i,rho_j;
 	float4 accel_surfTensForce = (float4)( 0.0f, 0.0f, 0.0f, 0.0f );
+//	float surfTensCoeff = -1.5e-09f * 0.3f* (float)(Wpoly6Coefficient * pow(hScaled2/2.0,3.0)) * simulationScale;
 	//float4 normalVector = (float4)( 0.0f, 0.0f, 0.0f, 0.0f );
 	//float  nV_length;
 	//int neighbor_cnt = 0;
@@ -643,7 +649,8 @@ __kernel void pcisph_computeForcesAndInitPressure(
 				//0.09 for experiments with water drops
 				//-0.0133
 				// surface tension force
-				accel_surfTensForce += ( -1.5e-09f * 0.3f* (float)(Wpoly6Coefficient * pow(hScaled2/2.0,3.0)) * simulationScale ) * (sortedPosition[id]-sortedPosition[jd]);
+				//accel_surfTensForce += ( -1.5e-09f * 0.3f* (float)(Wpoly6Coefficient * pow(hScaled2/2.0,3.0)) * simulationScale ) * (sortedPosition[id]-sortedPosition[jd]);
+				accel_surfTensForce += surfTensCoeff * (sortedPosition[id]-sortedPosition[jd]); //Chris J. Jan 2014, coeff constant math factored out to host side
 			}
 		}
 		
@@ -669,7 +676,8 @@ __kernel void pcisph_computeForcesAndInitPressure(
 	//float viscosity = 0.3;//0.5f;//0.1f
 	// mu = viscosity
 
-	sum *= (float)(mass * mu) * (float)(del2WviscosityCoefficient/rho[id]);
+	//sum *= (float)(mass * mu) * (float)(del2WviscosityCoefficient/rho[id]);
+	sum *= viscosityCoeffCombined/rho[id];
 
 	// apply external forces
 	acceleration_i = sum;
@@ -966,7 +974,8 @@ __kernel void pcisph_predictPositions(
 __kernel void pcisph_predictDensity(
 									 __global float2 * neighborMap,
 									 __global uint * particleIndexBack,
-									 /*float*/double Wpoly6Coefficient,
+									 float scaledPolyCoeff_x_mass,
+									 //double Wpoly6Coefficient,
 									 //float gradWspikyCoefficient,
 									 float h,
 									 float mass,
@@ -985,12 +994,14 @@ __kernel void pcisph_predictDensity(
 	id = particleIndexBack[id];//track selected particle (indices are not shuffled anymore)
 	int idx = id * MAX_NEIGHBOR_COUNT;
 	int nc=0;//neighbor counter
-	/*double*/double density = 0.0f;
+//	double density = 0.0;
+	float densityAccum = 0.0f;
+	float h2 = h*h;
 	float4 r_ij;
 	float r_ij2;//squared r_ij
-	float hScaled = h * simulationScale;//scaled smoothing radius
-	float hScaled2 = hScaled*hScaled;//squared scaled smoothing radius
-	float hScaled6 = hScaled2*hScaled2*hScaled2;
+//	float hScaled = h * simulationScale;//scaled smoothing radius
+//	float hScaled2 = hScaled*hScaled;//squared scaled smoothing radius
+//	float hScaled6 = hScaled2*hScaled2*hScaled2;
 	//float2 nm;
 	int jd;
 	int real_nc = 0;
@@ -1013,33 +1024,46 @@ __kernel void pcisph_predictDensity(
 		if( (jd = NEIGHBOR_MAP_ID( neighborMap[ idx + nc ])) != NO_PARTICLE_ID )
 		{
 			r_ij = sortedPosition[PARTICLE_COUNT+id]-sortedPosition[PARTICLE_COUNT+jd];
-			r_ij2 = (r_ij.x*r_ij.x+r_ij.y*r_ij.y+r_ij.z*r_ij.z)*simulationScale*simulationScale;
+			r_ij2 = (r_ij.x*r_ij.x+r_ij.y*r_ij.y+r_ij.z*r_ij.z);//*simulationScale*simulationScale;
 
-			if(r_ij2<hScaled2)
+			//if(r_ij2<hScaled2)
+			if(r_ij2<h2)
 			{
-				density += (hScaled2-r_ij2)*(hScaled2-r_ij2)*(hScaled2-r_ij2);
+				//density += (hScaled2-r_ij2)*(hScaled2-r_ij2)*(hScaled2-r_ij2);
+				densityAccum += (h2-r_ij2)*(h2-r_ij2)*(h2-r_ij2);
 				real_nc++;
 			}
 
+/*** debug code
 			if(r_ij2==0)
 			{
 				//printf("\a\n");
 				printf("@@@|>>[%d]-[%d]<<|@@@ %E @@@@ (%f) (%f) ####",id,jd,((double)r_ij2),sortedPosition[PARTICLE_COUNT+id].w,sortedPosition[PARTICLE_COUNT+jd].w );
 			}
+ ***/
 		}
 
 	}while( ++nc < MAX_NEIGHBOR_COUNT );
 	
-	//if(density==0.f) 
-	if(density<hScaled6)
+/*	if(density<hScaled6)
 	{
 		//density += hScaled6;
 		density = hScaled6;
 	}
+*/
+	float h6 = h2*h2*h2;
+	if(densityAccum < h6)
+	{
+		densityAccum = h6;
+	}
 
-
-	density *= ((double)mass)*Wpoly6Coefficient; // since all particles are same fluid type, factor this out to here
-	rho[ PARTICLE_COUNT+id ] = (float)density; 
+//	float scale3 = simulationScale*simulationScale*simulationScale;
+//	double scale6 = (double)scale3*(double)scale3;
+//	density = (double)densityAccum;
+//	density *= scale6*((double)mass)*Wpoly6Coefficient; // since all particles are same fluid type, factor this out to here
+	densityAccum *= scaledPolyCoeff_x_mass;
+	rho[ PARTICLE_COUNT+id ] = densityAccum;
+//	rho[ PARTICLE_COUNT+id ] = (float)density;
 }
 
 
@@ -1090,8 +1114,9 @@ __kernel void pcisph_computePressureForceAcceleration(
 								  __global float4 * sortedVelocity,
 								  __global uint * particleIndexBack,
 								  float delta,
-								  /*float*///float del2WviscosityCoefficient,
-								  /*float*/double gradWspikyCoefficient,
+								  //double del2WviscosityCoefficient,
+								  float spikyCoeff_x_mass,
+								  //double gradWspikyCoefficient,
 								  float h,
 								  float mass,
 								  float mu,
@@ -1147,7 +1172,8 @@ __kernel void pcisph_computePressureForceAcceleration(
 				vr_ij = (sortedPosition[id]-sortedPosition[jd])*simulationScale; vr_ij.w = 0;
 
 				
-				if(r_ij<0.5*(hScaled/2))//hScaled/2 = r0 
+				//if(r_ij<0.5*(hScaled/2))//hScaled/2 = r0
+				if(r_ij<0.25f*hScaled)//hScaled/2 = r0
 				{
 					value = -(hScaled*0.25f-r_ij)*(hScaled*0.25f-r_ij)*0.5f*(rho0*delta)/rho[PARTICLE_COUNT+jd];
 					vr_ij = (sortedPosition[id]-sortedPosition[jd])*simulationScale; vr_ij.w = 0;
@@ -1175,7 +1201,8 @@ __kernel void pcisph_computePressureForceAcceleration(
 
 	}while( ++nc < MAX_NEIGHBOR_COUNT );
 
-	/*1*/result *= (float)( ((double)mass)*gradWspikyCoefficient/((double)rho[PARTICLE_COUNT+id]) );
+	result *= spikyCoeff_x_mass/rho[PARTICLE_COUNT+id];//Chris J. Jan 2014 combined coeff * mass on host side
+	/*1*///result *= (float)( ((double)mass)*gradWspikyCoefficient/((double)rho[PARTICLE_COUNT+id]) );
 	/*2*///result *= mass*gradWspikyCoefficient;
 	//
 	//result = -2.f*mass*pressure[id]*sum_gradW/(rho0*rho0);
@@ -1363,7 +1390,7 @@ __kernel void computeInteractionWithMembranes(
 						int numOfElasticP,
 						float r0 )
 {
-	int id = get_global_id( 0 ); 
+	int id = get_global_id( 0 );
 	if(id>=PARTICLE_COUNT) return;
 	
 	id = particleIndexBack[id]; 
@@ -1376,7 +1403,7 @@ __kernel void computeInteractionWithMembranes(
 	
 	if((int)(position[ id_source_particle ].w) == BOUNDARY_PARTICLE) return;
 
-	if((int)(position[ id_source_particle ].w) != LIQUID_PARTICLE) return;	//!!! currently we consider only liquid particles 
+	if((int)(position[ id_source_particle ].w) != LIQUID_PARTICLE) return;	//!!! currently we consider only liquid particles
 																			//!!! interacting with membranes 
 	
 	int jd, idx = id * MAX_NEIGHBOR_COUNT;
@@ -1395,11 +1422,13 @@ __kernel void computeInteractionWithMembranes(
 	int    membrane_jd [MAX_NEIGHBOR_COUNT];
 	int	   membrane_jd_counter = 0;
 	int    membrane_ijk_counter = 0;
+	int my_neighbors[MAX_NEIGHBOR_COUNT];
 
 	for(i=0;i<MAX_NEIGHBOR_COUNT;i++)
 	{
 		membrane_jd_normal_vector[i] = (float4)(0,0,0,0);
 		//membrane_jd[i] = -1;
+		my_neighbors[i] = NEIGHBOR_MAP_ID( neighborMap[ idx + i] );
 	}
 
 	//check all neighbours of each particle to find those which belong to membranes.
@@ -1409,7 +1438,8 @@ __kernel void computeInteractionWithMembranes(
 	for(int nc=0; nc<MAX_NEIGHBOR_COUNT; nc++)//nc - neighbour counter
 	{//search for membrane particles through all id-th particle neighbours
 	//11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111
-		if( (jd = NEIGHBOR_MAP_ID( neighborMap[ idx + nc ])) != NO_PARTICLE_ID)
+		//if( (jd = NEIGHBOR_MAP_ID( neighborMap[ idx + nc ])) != NO_PARTICLE_ID)
+		if( (jd = my_neighbors[nc]) != NO_PARTICLE_ID)
 		{
 			jd_source_particle = PI_SERIAL_ID( particleIndex[jd] );
 
@@ -1419,8 +1449,9 @@ __kernel void computeInteractionWithMembranes(
 				membrane_ijk_counter = 0;
 				vector_id_jd = position[id_source_particle] - position[jd_source_particle];
 				vector_id_jd.z = 0; //mv change from subscripting
-				_distance_id_jd = sqrt(dot(vector_id_jd,vector_id_jd));
-				// elastic matter particles have no information 
+				//_distance_id_jd = sqrt(dot(vector_id_jd,vector_id_jd));
+				_distance_id_jd = sqrt( vector_id_jd.x*vector_id_jd.x + vector_id_jd.y*vector_id_jd.y + vector_id_jd.z*vector_id_jd.z );
+				// elastic matter particles have no information
 				// about participation in membrane composition
 				// Let's get it - check corresponding position of particleMembranesList (if it is non-empty)
 				for(int mli=0;mli<MAX_MEMBRANES_INCLUDING_SAME_PARTICLE;mli++)
@@ -1541,7 +1572,7 @@ __kernel void computeInteractionWithMembranes(
 		else break;
 	}//11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111
 
-//        barrier(CLK_LOCAL_MEM_FENCE | CLK_GLOBAL_MEM_FENCE);
+	//barrier(CLK_LOCAL_MEM_FENCE);
         //barrier(CLK_GLOBAL_MEM_FENCE);
 	if(membrane_jd_counter>0)
 	{
@@ -1574,17 +1605,20 @@ __kernel void computeInteractionWithMembranes(
 		}//333333333333333333333333333333333333333333333333333333333333333333333333
 		while( ++nc < membrane_jd_counter );
 
-		n_c_i.w = 0;
-		n_c_i_length = DOT(n_c_i,n_c_i);
+		n_c_i.w = 0.f;
+		n_c_i_length = n_c_i.x*n_c_i.x + n_c_i.y*n_c_i.y + n_c_i.z*n_c_i.z;
+		//n_c_i_length = DOT(n_c_i,n_c_i);
 
 		if(n_c_i_length != 0)
 		{
 			//change of coordinates for id_source_particle
 			n_c_i_length = sqrt(n_c_i_length);
 			delta_pos = 1.0f*((n_c_i/n_c_i_length)*w_c_im_second_sum)/w_c_im_sum;	//
-			position[PARTICLE_COUNT+id_source_particle].x += delta_pos.x;		//
-			position[PARTICLE_COUNT+id_source_particle].y += delta_pos.y;		// Ihmsen et. al., 2010, page 4, formula (11)
-			position[PARTICLE_COUNT+id_source_particle].z += delta_pos.z;		//
+			//delta_pos.w = 0.f;
+			position[PARTICLE_COUNT+id_source_particle] += delta_pos;
+			//position[PARTICLE_COUNT+id_source_particle].x += delta_pos.x;		//
+			//position[PARTICLE_COUNT+id_source_particle].y += delta_pos.y;		// Ihmsen et. al., 2010, page 4, formula (11)
+			//position[PARTICLE_COUNT+id_source_particle].z += delta_pos.z;		//
 
 			velocity_membrane_average += velocity[PARTICLE_COUNT+id_source_particle];
 			velocity_membrane_average /= (membrane_jd_counter+1);
@@ -1631,6 +1665,7 @@ x*/
 		}
 		
 	}
+	//barrier(CLK_GLOBAL_MEM_FENCE);
 }
 
 __kernel void computeInteractionWithMembranes_finalize(

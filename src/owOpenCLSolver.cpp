@@ -124,7 +124,7 @@ void owOpenCLSolver::initializeOpenCL()
 	// CL_DEVICE_TYPE
     cl_device_type type;
 	const int device_type [] = {CL_DEVICE_TYPE_CPU,CL_DEVICE_TYPE_GPU};
-	int preferable_device_type = 0;// 0-CPU, 1-GPU
+	int preferable_device_type = 1;// 0-CPU, 1-GPU
 	
 	unsigned int plList = 0;//selected platform index in platformList array [choose CPU by default]
 	//added autodetection of device number corresonding to preferrable device type (CPU|GPU) | otherwise the choice will be made from list of existing devices
@@ -170,15 +170,15 @@ void owOpenCLSolver::initializeOpenCL()
 	if(result == CL_SUCCESS) printf("CL_CONTEXT_PLATFORM [%d]: CL_DEVICE_NAME [%d]: \t%s\n",plList, deviceNum, cBuffer);
 	if(strlen(cBuffer)<1000) strcpy(device_full_name,cBuffer);
 	result = devices[deviceNum].getInfo(CL_DEVICE_MAX_WORK_GROUP_SIZE,&val3);
-	if(result == CL_SUCCESS) printf("CL_CONTEXT_PLATFORM [%d]: CL_DEVICE_MAX_WORK_GROUP_SIZE [%d]: \t%d\n",plList, deviceNum, val3);
+	if(result == CL_SUCCESS) printf("CL_CONTEXT_PLATFORM [%d]: CL_DEVICE_MAX_WORK_GROUP_SIZE [%d]: \t%u\n",plList, deviceNum, val3);
 	result = devices[deviceNum].getInfo(CL_DEVICE_MAX_COMPUTE_UNITS,&value);
 	if(result == CL_SUCCESS) printf("CL_CONTEXT_PLATFORM [%d]: CL_DEVICE_MAX_COMPUTE_UNITS [%d]: \t%d\n",plList, deviceNum, value);
 	result = devices[deviceNum].getInfo(CL_DEVICE_GLOBAL_MEM_SIZE,&val2);
-	if(result == CL_SUCCESS) printf("CL_CONTEXT_PLATFORM [%d]: CL_DEVICE_GLOBAL_MEM_SIZE [%d]: \t%d\n",plList, deviceNum, val2);
+	if(result == CL_SUCCESS) printf("CL_CONTEXT_PLATFORM [%d]: CL_DEVICE_GLOBAL_MEM_SIZE [%d]: \t%u\n",plList, deviceNum, val2);
 	result = devices[deviceNum].getInfo(CL_DEVICE_GLOBAL_MEM_CACHE_SIZE,&val2);
-	if(result == CL_SUCCESS) printf("CL_CONTEXT_PLATFORM [%d]: CL_DEVICE_GLOBAL_MEM_CACHE_SIZE [%d]: \t%d\n",plList, deviceNum, val2);
+	if(result == CL_SUCCESS) printf("CL_CONTEXT_PLATFORM [%d]: CL_DEVICE_GLOBAL_MEM_CACHE_SIZE [%u]: \t%d\n",plList, deviceNum, val2);
 	result = devices[deviceNum].getInfo(CL_DEVICE_LOCAL_MEM_SIZE,&val2);
-	if(result == CL_SUCCESS) printf("CL_CONTEXT_PLATFORM [%d]: CL_DEVICE_LOCAL_MEM_SIZE [%d]: \t%d\n",plList, deviceNum, val2);
+	if(result == CL_SUCCESS) printf("CL_CONTEXT_PLATFORM [%d]: CL_DEVICE_LOCAL_MEM_SIZE [%d]: \t%u\n",plList, deviceNum, val2);
 	
 	queue = cl::CommandQueue( context, devices[ deviceNum ], 0, &err );
 	if( err != CL_SUCCESS ){
@@ -213,6 +213,9 @@ void owOpenCLSolver::initializeOpenCL()
 //Kernels functions definition
 unsigned int owOpenCLSolver::_runClearBuffers()
 {
+	// bypass, function now redundant
+	return 0;
+	
 	// Stage ClearBuffers
 	clearBuffers.setArg( 0, neighborMap );
 	clearBuffers.setArg( 1, PARTICLE_COUNT );
@@ -292,12 +295,14 @@ unsigned int owOpenCLSolver::_runIndexx()
 	indexx.setArg( 3, PARTICLE_COUNT );
 	int gridCellCountRoundedUp = ((( gridCellCount - 1 ) / local_NDRange_size ) + 1 ) * local_NDRange_size;
 	int err = queue.enqueueNDRangeKernel(
-		indexx, cl::NullRange, cl::NDRange( (int) ( /**/gridCellCountRoundedUp/**/ ) ),
+		indexx, cl::NullRange, cl::NDRange( (int) ( gridCellCountRoundedUp ) ),
 #if defined( __APPLE__ )
-		cl::NullRange, NULL, NULL );
+		cl::NDRange( 1 ), NULL, NULL );
+//		cl::NullRange, NULL, NULL );
 #else
 		cl::NDRange( (int)( local_NDRange_size ) ), NULL, NULL );
 #endif
+
 #if QUEUE_EACH_KERNEL
 	queue.finish();
 #endif
@@ -340,13 +345,15 @@ unsigned int owOpenCLSolver::_runFindNeighbors()
 	int err = queue.enqueueNDRangeKernel(
 		findNeighbors, cl::NullRange, cl::NDRange( (int) ( PARTICLE_COUNT_RoundedUp ) ),
 #if defined( __APPLE__ )
-		cl::NullRange, NULL, NULL );/* 
+//		cl::NullRange, NULL, NULL );
+	/*
 		local_work_size can also be a NULL
 		value in which case the OpenCL implementation will
 		determine how to be break the global work-items 
 		into appropriate work-group instances.
 		http://www.khronos.org/registry/cl/specs/opencl-1.0.43.pdf, page 109 
 		*/
+	cl::NDRange( (int)( 1 ) ), NULL, NULL );
 #else
 		cl::NDRange( (int)( local_NDRange_size ) ), NULL, NULL );
 #endif
@@ -359,7 +366,8 @@ unsigned int owOpenCLSolver::_run_pcisph_computeDensity()
 {
 	// Stage ComputeDensityPressure
 	pcisph_computeDensity.setArg( 0, neighborMap );
-	pcisph_computeDensity.setArg( 1, Wpoly6Coefficient );
+	pcisph_computeDensity.setArg( 1, polyCoeff_x_mass );
+	//pcisph_computeDensity.setArg( 1, Wpoly6Coefficient );
 	//pcisph_computeDensity.setArg( 2, gradWspikyCoefficient );
 	pcisph_computeDensity.setArg( 2, h );
 	pcisph_computeDensity.setArg( 3, mass );
@@ -393,8 +401,10 @@ unsigned int owOpenCLSolver::_run_pcisph_computeForcesAndInitPressure()
 	pcisph_computeForcesAndInitPressure.setArg( 4, sortedVelocity );
 	pcisph_computeForcesAndInitPressure.setArg( 5, acceleration );
 	pcisph_computeForcesAndInitPressure.setArg( 6, particleIndexBack );
-	pcisph_computeForcesAndInitPressure.setArg( 7, Wpoly6Coefficient );
-	pcisph_computeForcesAndInitPressure.setArg( 8, del2WviscosityCoefficient );
+	pcisph_computeForcesAndInitPressure.setArg( 7, surfTensCoeff );
+//	pcisph_computeForcesAndInitPressure.setArg( 7, Wpoly6Coefficient );
+	pcisph_computeForcesAndInitPressure.setArg( 8, viscosityCoeffCombined );
+//	pcisph_computeForcesAndInitPressure.setArg( 8, del2WviscosityCoefficient );
 	pcisph_computeForcesAndInitPressure.setArg( 9, h );
 	pcisph_computeForcesAndInitPressure.setArg(10, mass );
 	pcisph_computeForcesAndInitPressure.setArg(11, viscosity );
@@ -493,7 +503,8 @@ unsigned int owOpenCLSolver::_run_pcisph_predictDensity()
 	// Stage ComputeDensityPressure
 	pcisph_predictDensity.setArg( 0, neighborMap );
 	pcisph_predictDensity.setArg( 1, particleIndexBack );
-	pcisph_predictDensity.setArg( 2, Wpoly6Coefficient );
+//	pcisph_predictDensity.setArg( 2, Wpoly6Coefficient );
+	pcisph_predictDensity.setArg( 2, scaledPolyCoeff_x_mass );
 	//pcisph_predictDensity.setArg( 3, gradWspikyCoefficient );
 	pcisph_predictDensity.setArg( 3, h );
 	pcisph_predictDensity.setArg( 4, mass );
@@ -558,7 +569,8 @@ unsigned int owOpenCLSolver::_run_pcisph_computePressureForceAcceleration()
 	pcisph_computePressureForceAcceleration.setArg( 5, particleIndexBack );
 	pcisph_computePressureForceAcceleration.setArg( 6, delta );
 	//pcisph_computePressureForceAcceleration.setArg( 7, del2WviscosityCoefficient );
-	pcisph_computePressureForceAcceleration.setArg( 7, gradWspikyCoefficient );
+	pcisph_computePressureForceAcceleration.setArg( 7, spikyCoeff_x_mass );
+//	pcisph_computePressureForceAcceleration.setArg( 7, gradWspikyCoefficient );
 	pcisph_computePressureForceAcceleration.setArg( 8, h );
 	pcisph_computePressureForceAcceleration.setArg(  9, mass );
 	pcisph_computePressureForceAcceleration.setArg( 10, viscosity );
@@ -571,7 +583,8 @@ unsigned int owOpenCLSolver::_run_pcisph_computePressureForceAcceleration()
 	int err = queue.enqueueNDRangeKernel(
 		pcisph_computePressureForceAcceleration, cl::NullRange, cl::NDRange( (int) ( PARTICLE_COUNT_RoundedUp ) ),
 #if defined( __APPLE__ )
-		cl::NullRange, NULL, NULL );
+//		cl::NullRange, NULL, NULL );
+	cl::NDRange( (int)( 1 ) ), NULL, NULL );
 #else
 		cl::NDRange( (int)( local_NDRange_size ) ), NULL, NULL );
 #endif
@@ -590,7 +603,8 @@ unsigned int owOpenCLSolver::_run_clearMembraneBuffers()
 	int err = queue.enqueueNDRangeKernel(
 		clearMembraneBuffers, cl::NullRange, cl::NDRange( (int) ( PARTICLE_COUNT_RoundedUp ) ),
 #if defined( __APPLE__ )
-		cl::NullRange, NULL, NULL );
+//		cl::NullRange, NULL, NULL );
+	cl::NDRange( (int)( 1 ) ), NULL, NULL );
 #else
 		cl::NDRange( (int)( local_NDRange_size ) ), NULL, NULL );
 #endif
@@ -616,10 +630,13 @@ unsigned int owOpenCLSolver::_run_computeInteractionWithMembranes()
 	int err = queue.enqueueNDRangeKernel(
 		computeInteractionWithMembranes, cl::NullRange, cl::NDRange( (int) ( PARTICLE_COUNT_RoundedUp ) ),
 #if defined( __APPLE__ )
-		cl::NullRange, NULL, NULL );
+		//cl::NullRange, NULL, NULL );
+	cl::NDRange( (int)( 1 ) ), NULL, NULL );
 #else
 		cl::NDRange( (int)( local_NDRange_size ) ), NULL, NULL );
 #endif
+ 
+//	int err = queue.enqueueTask( computeInteractionWithMembranes );
 #if QUEUE_EACH_KERNEL
 	queue.finish();
 #endif
@@ -636,7 +653,8 @@ unsigned int owOpenCLSolver::_run_computeInteractionWithMembranes_finalize()
 	int err = queue.enqueueNDRangeKernel(
 		computeInteractionWithMembranes_finalize, cl::NullRange, cl::NDRange( (int) ( PARTICLE_COUNT_RoundedUp ) ),
 #if defined( __APPLE__ )
-		cl::NullRange, NULL, NULL );
+//		cl::NullRange, NULL, NULL );
+	cl::NDRange( (int)( 1 ) ), NULL, NULL );
 #else
 		cl::NDRange( (int)( local_NDRange_size ) ), NULL, NULL );
 #endif
